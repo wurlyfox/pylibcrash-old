@@ -1,0 +1,82 @@
+architecture
+
+     python application
+            | 
+            V
+        pylibcrash 
+         |      |
+         V      V  
+cffi-generated ctypemap
+   wrappers
+     |
+     V
+  libcrash
+
+
+pylibcrash - python implementation of c libcrash
+
+data structures from the c implementation are reused and imported via 
+cffi. all code for parsing, packing, and unpacking of this data exists 
+in a separate generic type mapping layer.
+
+each c data structure (cffi type) is mapped to a python class. this
+mapping is driven by the c structure definition as well as metadata. 
+metadata is needed to describe the variable format parts of the 
+underlying structure data (i.e. contents of flexible arrays, count/size, 
+offsets and pointers, polymorphic types, etc).
+
+given a set of raw data, the mapper merely constructs an object which 
+is a 'view' of it (i.e. extension of a numpy structured array); no 
+movement of data occurs until the object is unpacked/packed. this means 
+that objects can easily be casted to their underlying c representation 
+and passed to ffi calls; this is useful as some of the library functions 
+(i.e. gfx) are not well suited for python (performance would be poor for 
+such ports) and are called directly via cffi.
+
+---
+
+same:
+
+- both use same underlying data representations
+
+diff:
+1) c - manually implements pack/unpack per object
+   python - pack/unpack handled by ctypemap
+   
+2) c - pointers in structures;
+       manually implements read/write per object for index/offset/id to 
+       pointer conversion; index(es)/offset(s)/id(s) fields are unioned
+       with their corresponding pointer fields which are replaced -in 
+       place- with a pointer(s) to the corresponding resolved object(s)
+       after conversion/resolution
+   python - actual pointer(s) fields in underlying structures are ignored/unused;
+            offsets conversion is instead auto-handled by ctypemap; name 
+            resolution for pointers/pointer fields retrieves:
+            - post unpack:
+              - list of object [references] or object [reference]
+            - post pack:
+              - array of object [references] or object [reference]
+            manual code for id to -reference- conversion still required
+            
+3) c - most functions are separate from python implementation
+   python - most functions are ported over from c; 
+            exceptions are those which would perform poorly in python or 
+            are better suited for sub-operations
+            
+   standard is:
+   
+   <struct>_alloc  ------> auto implemented by ctypemap (__new__)
+   <struct>_init   ------> __init__ of mapped python class
+   <struct>_new    ------> equivalent to constructor call of mapped python class
+   <struct>_read   ------> *does not exist; not needed
+   <struct>_write  ------> *does not exist; not needed
+   <struct>_pack   ------> auto implemented by ctypemap
+   <struct>_unpack ------> auto implemented by ctypemap
+   
+   <struct>_do_something > implemented as do_something in mapped python class
+   
+   *the functions are not needed because the equivalent python object 
+    reference resolution is handled by ctypemap
+    
+    
+   

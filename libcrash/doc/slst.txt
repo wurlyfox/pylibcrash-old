@@ -1,0 +1,273 @@
+q: What is the significance of the ordering of polygon ids in the scenery list?
+
+a: There may be multiple reasons for the ordering. The first reason is at
+   least partly for the draw order. The second may be for optimal encoding
+   of the corresponding delta lists.
+   
+   Polygon ids are processed in their order in the scenery list. For each
+   polygon id, the coordinates for the corresponding polygon are loaded 
+   and perspective transformed, and then a polygon primitive is created 
+   and placed into a display list bucket (i.e. bucket sorted). The index 
+   of the bucket which the polygon is placed into is dependent on the 
+   minimum average z value of perspective transformed primitives detected
+   thus far. More precisely this average value is scaled and offset relative
+   to a given z location, likely that of some near plane, so that the range
+   of polygons placed in the display list are exactly those within the 
+   viewing frustum, and any outside valid indices are discarded.
+   
+   For whatever the order of polygon ids in the scenery list, ids for 
+   polygons with average z values that are larger than that of some 
+   preceding polygon are all placed into the same bucket:
+   
+   100     [100]: 100
+   90      [90]: 90
+   80      [80]: 80, 90, 100, 90, 80
+   90      [70]: 70
+   100  => [60]: 60
+   90
+   80
+   70
+   60
+   
+   If polygon ids were not placed into the bucket with index [dependent
+   on] the current minimum average z value, but rather directly into the
+   bucket with index [dependent on] the current *polygon* average z value,
+   then the order of polygons in the scenery list would have no effect on
+   the draw order:
+   
+   100     [100]: 100, 100
+   90      [90]: 90, 90, 90
+   80      [80]: 80, 80
+   90      [70]: 70 
+   100  => [60]: 60
+   90
+   80
+   70
+   60
+   
+   (any ordering of the average z values on the left and thus the 
+    corresponding polygon ids would yield the same display list order;
+    any permutation of a list always sorts to the same list)
+   
+   The minimum average z logic thus gives some significance to the 
+   ordering of polygon ids in the scenery list. In particular, the 
+   order of polygon ids in the display list is exactly the order of 
+   polygon ids in the scenery list. But with the catch that average z
+   values of polygons in a particular bucket are not necessarily all the
+   same and thus are not all some constant scaling and addition of the 
+   index.
+   
+   This means that object polygons (with varying z position at a 
+   particular path point) can weave into the display lists between the
+   constant positioned scenery polygons while the higher accuracy non
+   z-based sort order for the scenery polygons is maintained.
+   
+   
+=====================
+
+
+slst testing
+
+1) generate test wgeo layout (procedurally generate)
+2) generate camera paths
+3) split camera paths
+4) generate zones extents from split camera paths and possibly world 
+   geom.
+5) split camera paths again within zones
+6) generate octrees from zone extents and world geometry
+7) split world geometry and choose nearest n partitions for each zone
+8) generate slsts for each path split in each zone using geometry for 
+   the zone's worlds
+9) encode the zones, incl camera paths, octrees, slsts, wgeo refs, and
+   the corresponding wgeos, as newly allocated items of newly allocated
+   entries
+10) implement an nsf_entries_pack function which should do the following 
+    for each of the currently 'working entries':
+    1) reallocate the memory pointed to by the item pointers to the end
+       of the entry structure (there should be item_count pointers, so 
+       the data for the items should be placed (contiguously) exactly 
+       after item count+1 pointers, and the last pointer should point to 
+       the end of the data) and update the pointers accordingly
+    2) if the entry has no page assigned to it in the page tables, 
+       assign it a (possibly newly allocated) page, appending pointer 
+       to it in the pages list of entries (pointers)
+11) implement an nsf_pages_pack function which should do the following
+    for each of the currently 'working pages':
+    1) rellocate the memory pointed to by the entry pointers to the end
+       of the page [structure] (there should be entry count pointers, so
+       the data for the entries should be placed (contiguously) exactly
+       after entry count+1 pointers, and the last pointer should point
+       to the end of the data) and update the pointers accordingly
+    2) if a pointer to the page does not exist in the page list then 
+       insert it at the appropriate position according to the assigned 
+       page id
+12) implement an nsf_pack function which should compress the N most 
+    expensive pages and then reallocate a section containing the 
+    compressed data followed by contiguous data of all pages
+13) implement an nsf_write function which should do the opposite of the 
+    nsf_read; that is-convert the compressed page pointers and the main 
+    pages pointer to relative offsets and return a pointer to the raw
+    packed data
+13) implement an nsd_pack functoin which should
+14) implement an nsd_write function which should do the opposite of the 
+    nsd_read function; that is-convert the page table bucket pointers 
+    to relative offsets and return a raw pointer to the nsd struct
+    
+    
+    
+================
+
+extension: 'working' (modifiable/expandable/contractable) object interface
+
+- the object is no longer read-only and therefore we can
+  - allocate new objects of the type
+  - initialize objects of the type
+  - add to or remove from, objects of the type
+  - save/write objects of the type
+- when an object is initially read, it will be in packed form to fit 
+  minimal space in the file-that is, all referenced memory for the 
+  object is stored contiguously in the structure, and all objects of
+  that type are stored contiguously. thus in order to add to or remove 
+  from the object without extending into other parts or other objects
+  it must first be unpacked.
+- after an object is unpacked it must be (re)packed into a contiguous
+  region before it can be saved/written
+- the following operations are therefore required for this interface:
+
+  - object_read()
+  - object_write()
+  - object_unpack()
+  - object_pack()
+  - object_alloc()
+  - object_init()
+  - object_new() [opt.]
+  - object_extend() [opt., unpacked only]
+
+- a new object of the type should be unpacked by default. packed objects
+  are allocated additional (possibly variable length) memory, that is-in 
+  addition to the variable length memory for some flexible array member. 
+  unpacked objects should only be allocated memory for the structure and 
+  sufficient number of flexible array members. references within the 
+  unpacked object to external objects otherwise become references to
+  internal objects once the object is packed.
+  
+- only memory for sufficient number of flexible array members is 
+  required for a newly allocated unpacked object; once the object is 
+  packed it does not matter how much extra was allocated, for the 
+  unpacked object will be freed/reallocated 
+  
+- the c++ alternative approach with vectors would essentially be doing 
+  the same thing by allocating some pre-set amount of extra memory 
+  in advance to account for appends/extension (without having to realloc
+  for each new item). the difference here is that the unpacked object
+  can be memcpy'ed directly to get the initial part of the packed object
+  and in most cases simply reallocated
+  
+
+=============
+
+
+
+
+
+
+nsd *nsd;
+nsf *nsf;
+nsd_ldat *ldat;
+int ldat_size;
+zone *zone;
+eid_t zone_eid;
+uint8_t *nsd_data, *nsf_data;
+size_t nsd_size, nsf_size;
+FILE *nsd_file, *nsf_file;
+
+// reserve a new unpacked nsd with room for 256/(512?) entry pointers
+nsd = nsd_new(0);
+
+// reserve an unpacked entry [header] with room for 128 item pointers
+zone_eid = ...?
+zone = nsd_entry_new(nsd, zone_eid, 7, 0);
+
+// do stuff to zone, add items, etc
+// keep a separate array with the sizes of each item
+...
+
+// create a new nsf for the nsd. this will:
+//   1) allocate an initial region of N page [headers] each with room 
+//      for 256? entry pointers. at any point if the count reaches 
+//      above N then reallocate accordingly
+//   2) iterate the page tables. for each pte: 
+//      a) pack the corresponding entry 
+//      b) find a page within which it would fit
+//         (we might have rules on which pages an entry should go into
+//         based on spatial relativity for corresponding content)
+//      c) add the entry to the page's entry (pointer) list and update
+//         its entry count
+//      d) update the pte with the page id **and** the entry id
+//   3) determine top N which pages would benefit most from compression?
+//      create new compressed pages for them in a contiguous region
+//   4) allocate a region for N complete pages following the compressed
+//      pages region and memcpy the contents of each page header
+//   5) unpack pages in-place
+//   6) return a pointer to the compressed/uncompressed pages 
+//       
+nsf = nsf_new(nsd);
+
+// allocate the ldat
+image_data_size = ...?
+ldat_size = sizeof(nsd_ldat) + image_data_size;
+ldat = (nsd_ldat*)malloc()
+
+// populate ldat
+...
+
+// pack the nsd along with the ldat
+nsd = nsd_pack(nsd, ldat, ldat_size);
+
+// write the nsf and THEN the nsd (order is important)
+nsf_data = nsf_write(nsf, nsd, &nsf_size);
+nsd_data = nsd_write(nsd, &nsd_size);
+
+// now write the files
+nsf_file = fopen("S0000000.NSF", "wb");
+fwrite(nsf_data, 1, nsf_size, nsf_file);
+fclose(nsf_file);
+nsd_file = fopen("S0000000.NSD", "wb");
+fwrite(nsd_data, 1, nsd_size, nsd_file);
+fclose(nsd_file);
+
+
+
+|---------------|
+|  e1 ----      |
+|  e2 ----|-    |
+|  e3 ----|-|-  |
+| ------  | | | |
+| | e1 |<-  | | | 
+| ------    | | |
+| | e2 |<---  | |
+| ------      | |
+| | e3 |<-----  |
+| ------        |
+|---------------|
+x N...
+
+||
+VV
+                              e1
+|---------------|     |---------------|
+|  e1 ----------|---->|  i1 ----      |
+|  e2 ----------|--\  |  i2 ----|-    |
+|  e3 ----------|--\  |  i3 ----|-|-  |
+|  ^            | etc | ------  | | | |
+|  |            |     | | i1 |<-  | | |
+|  | reserved   |     | ------    | | |
+|  | for        |     | | i2 |<---  | |
+|  | elist ext  |     | ------      | |
+|  | and repack |     | | i3 |<-----  |
+|  v            |     | ------        |
+|---------------|     |---------------|
+x N ...
+                  
+                  
+                  

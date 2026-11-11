@@ -1,0 +1,23 @@
+- the functions in nsf.c use the nsd structure 'in the background'.
+ 
+  - nsf_read writes to this structure, and is the only such function in 
+    nsf.c that does so, resolving relative offsets to pointers to the 
+    actual nsf data. 
+  - all other functions in nsf.c use these resolved pointers for looking 
+    up data. they are only to be used -after- the pointers are resolved 
+    (i.e. after nsf_read is called)
+  - this is enforced by only allowing an nsf structure to be passed 
+    (one that is constructed with nsf_read) rather than a direct 
+    reference to an nsd structure. in this way the underlying reference 
+    in the nsf is one to an nsd that has had its relative offsets 
+    resolved to pointers in the nsf data
+  
+  - nsf.c functions are therefore those that:
+    - index or reference the resolved page pointers that exist in the 
+      nsd but point to page data in the nsf
+    - read from the page data pointed to by said pointers, but only 
+      from page headers (and not entry content), and a short operation
+      to be done for each pointer in the list.
+    - logic for finding an entry in a page -may- be more appropriate in
+      page.c?
+  

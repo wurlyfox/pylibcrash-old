@@ -1,0 +1,185 @@
+page_compress, else branch of if (span <= 2)
+
+      // state:
+      // sequence of length span was found which matches the previous 
+      // span bytes of input; end of sequence found is at index seq->idx
+      
+      
+      //                       
+      //       |--- i - idx ---|
+      //             |--- i - idx ---|
+      //
+      //       |-span|         |span-|
+      //            idx                i
+      // * ... A B C D m ... * A B C D n ...  (m != n)
+      //
+      // start of previous span bytes of input is at (i - span)
+      // start of found sequence is at idx - (span - 1) = idx - span + 1
+      // seek is start of found sequence relative to start of prev span
+      // of bytes
+      // i.e. (i - span) - (idx - span + 1) = i - (idx + 1)
+
+
+
+/*
+ * page_compress explanation:
+ * 
+ * page compression implementation is broken into 2 stages
+ * 
+ * stage 1)
+ * the first stage runs/loops for each byte of input data. only once per
+ * iteration, if the correct conditions are met (i.e. indicating ready
+ * to commit), it commits the next set of compressed bytes to the output 
+ * destination. each commit appends an optional unencoded portion
+ * followed by an encoded porition. state variables which control the 
+ * commit are:
+ *   - prefix - number of bytes which are encoded/represented
+ *              by the unencoded portion of the next commit 
+ *   - span   - number of bytes which are encoded by the
+ *              encoded portion of the next commit
+ * 
+ * this is transactional in the sense that it may take N bytes of input
+ * to read/process before the unencoded+encoded representation of those
+ * bytes is actually commited into the destination. at the point of 
+ * commit, N is equal to prefix+span. therefore the set of bytes from
+ * the src which is handled by the commit are at prefix+span bytes
+ * -behind- the current src pointer (i.e. src-(prefix+span)). prefix and
+ * span are reset (to 0) after each commit so that a new transaction can
+ * be built for the next set of input bytes.
+ * 
+ * decoding the committed bytes will thus result in the corresponding 
+ * set of bytes from the src 
+ * 
+ * for the first 9 bytes of input, the prefix value is forcibly incremen-
+ * ted by 1 (for each iteration) and nothing else is done. this prepares 
+ * those bytes for contributing to the unencoded portion of the next 
+ * commit, for (as explained momentarily) the encoded portion requires
+ * at least 9 bytes of preceding data in the output stream
+ * 
+ * for all iterations after the 9th iteration, the byte of input 9 bytes 
+ * behind the src is inserted into a suffix tree at the start of the 
+ * iteration, and the current byte of input data (at src) is looked up
+ * amongst the children of the previous byte of input data if it was
+ * found as a child in the previous iteration and so on-and otherwise 
+ * amongst the children of the root. starting at the 10th iteration, 
+ * this means the longest 
+ * 
+ */
+
+
+void page_sizes_verify(page_compressed *page_dst,
+		       uint32_t src_offset, uint8_t *dst) {
+  uint8_t *ptr;
+  uint8_t span, data;
+  uint16_t remainder;
+  size_t size, compressed_size;
+  
+  size = 0;
+  ptr = page_dst->data;
+ // printf("offsets\n");
+  while (size < src_offset) {
+   // printf("%08x ", src - (uint8_t*)page_src);
+    span = *(ptr++);
+    if (span & 0x80) {
+      data = *(ptr++);
+      span = (data & 7) + 3; 
+      // if (span == 10) span = 0x40;
+    }
+    else
+      ptr += span;
+    size += span;
+  }  
+  compressed_size = ptr - (uint8_t*)page_dst;
+  
+  printf("cur decompressed_size: %i\n", size);
+  printf("cur src offset: %i\n", src_offset);
+  printf("cur compressed size: %i\n", compressed_size);
+  printf("cur dst offset: %i\n", dst - (uint8_t*)page_dst);
+}
+
+page_compress debugging code:
+...
+ // if a copy op would have ended the sequence or otherwise the last 
+  // op as a compression op did not finish and was not committed, then 
+  // rewind src so that the corresponding bytes are instead direct 
+  // copied in the next stage
+  printf("src offset: %i\n", (src - (uint8_t*)page_src));
+  src -= (prefix + span);
+  ppspan = prefix+span;
+  
+  printf("adjusting src back prefix %i + span %i = %i \n", 
+    prefix, span, prefix+span);
+  printf("adjusted src offset: %i\n", (src - (uint8_t*)page_src));
+  
+  length = (uint32_t)(dst - (uint8_t*)page_dst) + (prefix + span);
+  offset = sector_offset(length);
+  printf("length: dst offset %i + (prefix+span) = %i\n", 
+    (dst - (uint8_t*)page_dst), length);
+  printf("sector offset: %i\n", offset);
+  offset_orig = offset;
+  src_orig = src;
+  
+  for (i=count-1;i>=0;i--) {
+    span = ptrs[i][0];
+    if (span & 0x80) {
+      data = ptrs[i][1];
+      span = (data & 7) + 3; 
+      // if (span == 10) span = 0x40;
+      if (offset+(span-2) > SECTOR_SIZE)
+        break;
+      offset += (span-1);
+    }
+    offset--;
+    src -= span;
+  }
+  
+  dst_adjusted = (dst - (ptrs[count]-ptrs[i+1]));
+  dst_adjusted2 = (dst_adjusted + (src_orig - src));
+  printf("verify that what has/will happened is equivalent:\n");
+  printf("adjusting dst offset back %i operations\n", 
+    count-1-i);
+  printf("the %i operations are %i bytes in length\n", 
+    count-1-i, ptrs[count]-ptrs[i+1]);
+  printf("so dst offset [should] be adjusted back to %i\n", 
+    dst_adjusted - (uint8_t*)page_dst);
+  printf("which has a sector offset of %i\n", 
+    sector_offset(dst_adjusted - (uint8_t*)page_dst));
+  printf("the operations will be replaced with their decompressed form "
+	 "which is %i bytes in length\n", src_orig - src);
+  printf("and after that the span and prefix bytes will be appended, "
+         "making the total length of the replacement %i bytes\n", 
+	 (src_orig - src) + ppspan);
+  printf("[src has also been shifted back by this amount and is at %i]\n",
+    src - (uint8_t*)page_src);
+  printf("this should then shift dst offset forward to %i\n",
+    dst_adjusted2 - (uint8_t*)page_dst);
+  printf("and then with the additional prefix and span bytes to %i\n",
+    (dst_adjusted2 - (uint8_t*)page_dst)+ppspan);
+  printf("which has a sector offset of %i\n", 
+    sector_offset((dst_adjusted2 - (uint8_t*)page_dst)+ppspan));
+  
+  dst = ptrs[i+1];
+  printf("actually adjusted dst to: %i\n", dst - (uint8_t*)page_dst);
+  printf("actual offset: %i\n", offset);
+  printf("the compressed form of the replaced bytes:\n");
+  for (j=i;j<count-1;j++) {
+    for (k=0;k<ptrs[i+1]-ptrs[i];k++)
+      printf("%02x ", ptrs[i][k]);
+    printf("|");
+  }
+  printf("\n");
+  
+  printf("the offsets:\n");
+  for (j=0;j<count;j++) {
+    printf("%08x ", ptrs[j]-(uint8_t*)page_dst);
+  }
+  printf("\n");
+  
+  printf("the uncompressed form:\n");
+  for (j=0;j<src_orig-src;j++) {
+    printf("%02x ", src[j]);
+  }
+  printf("\n");
+  
+  page_dst->magic = MAGIC_COMPRESSED;
+...

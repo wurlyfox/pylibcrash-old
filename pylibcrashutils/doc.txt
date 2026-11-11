@@ -1,0 +1,141 @@
+Unprocessed Objects
+
+'Unprocessed' is an intermediary state or representation of content, 
+usually under modification or construction. In this state, content is 
+unpacked and unencoded, allowing for complete extension and modification. 
+
+Unprocessed content may go through one or more stages of processing to
+reach a compatible target format.
+ 
+       1)          2)           3) ***                4)            5)
+... -> Physical -> Processed -> Unprocessed -> ... -> Processed  -> Physical -> ...
+                   Incompatible                       Compatible
+
+Stages
+1) Content of incompatible format is constructed via some external 
+   process and persisted. It exists on external storage. The exact logic 
+   used to produce such content may be unknown internally.
+2) Content of incompatible format is read from storage and parsed/decoded
+   into run-time representation. The 'import' logic must be known
+   internally.
+3) Logic exists to extract, combine, and load the relevant parts of one 
+   or more pieces of incompatible content from its run-time representation
+   into the initial unprocessed representation.
+   This may involve one or more additional transformations into a form
+   which more closely resembles the target format.
+4) Unprocessed content is processed/packed/encoded into a processed
+   run-time representation of the target format.
+5) The processed run-time data, now in the target format, is persisted 
+   on external storage.
+
+sometimes it is unnecessary to have an separate unprocessed 
+representation of the content and stage 3 can simply involve a direct
+conversion from the source (incompatible) format to the target 
+(compatible) format
+
+---
+
+Unprocessed Scene objects go through 2 states (in stage 3) before being 
+processed into the target entry formats:
+- state 1 involves populating the object from source content; the 
+  representation is intended to be generic and compatibility 
+- state 2 involves computing and dividing/packing the generic content
+  into consituent parts which more closely map to the target entry 
+  formats
+---
+
+Scene stages and states
+
+imported geometry:
+
+Stages
+1) 3d graphics software is used to produce a level model in the .obj 
+   format 
+2) The binary file contents are read and parsed into an Wavefront object
+3) Polygons, path, and textures are extracted from the Wavefront object
+   and transformed-i.e. split into parts or combined
+  A) populates a new Scene with
+     - the Wavefront object polygons (faces)
+     - the Wavefront object NurbsPath lines
+     - the Wavefront object textures
+  B) transforms the scene:
+     - partitions polygons into world models
+     - divides the path lines into multiple smaller paths;
+       calculates the bounding boxes for each path; 
+       then adds a constant amount of padding in each dimension to get 
+       zone boundaries; 
+       then, for each boundary:
+       - creates a new (unprocessed) zone
+       - further divides the path for the zone/boundary into multiple
+         smaller paths
+       - calculates the n nearest world models in the scene to the zone
+       - deterines which world polygons are contained within the zone
+         and generates an octree which approximates the space occupied
+         by said polygons 
+     - packs the individual textures into one or more 256x128 texture
+       atlases; updates polygon uv coords and texids to reference the 
+       subtexture regions and new atlases.
+4) The parts of the scene, i.e. the zones and camera paths, worlds, 
+   textures, slsts, etc. are packed or encoded into entries, and then
+   an nsf/nsd:
+  A) a wgeo is created for each world model
+  B) a zdat is created for each zone (incl. header, boundaries, and paths)
+  C) an slst is created for each path in the zdat, using lib routines for
+     - wgeo projection
+     - zbuffer rasterization
+     - zbuffer analysis
+     - slst encoding 
+  D) a tpag is created for each texture atlas
+  E) post-generate updates:
+    - neighbor zones, paths, and misc zone header data, are computed and 
+      updated for each zdat entry
+    - texture pages are determined and updated for each wgeo entry
+  F) post-post-generate updates:
+    - zone dependencies are determined and updated for each zdat entry
+  G) entries are packed into an nsf/nsd object
+5) nsf/nsd object is stored as .NSF/.NSD file pair
+---
+
+Pickling unprocessed objects
+
+it is possible to serialize/deserialize unprocessed objects directly 
+to/from a pickle file. this is the purest form of stage 2/4 which 
+involves the least amount of internal processing, encoding, packing, 
+decoding, parsing, etc. of the read/to be written data.
+
+note that only the original class type from which an object is
+constructed is preserved when serializing; if there is a change
+in the object's __class__ property (as in when simulating generic
+types), then the new type is not preserved. 
+
+most of the pylibcrash types are generic subclasses of Packable,
+and therefore change the __class__ property in construction; 
+Packables are initially constructed from np.void, and thus are 
+serialized as such-that is, the Packable subclass type is lost. 
+then, to recover the types of such objects after deserialization, 
+it is necessary to have a method (pickle_fix()) which re-casts the 
+objects accordingly]
+
+---------
+
+
+gfx modules layout
+
+gfx/general - generic gfx objects and computational logic
+              extension of the generic gfx objects defined in pylibcrash
+              - geom - geometric primitives with methods for computation
+              - geom_comp - more involved computational logic
+              - texture - textures, pixel formats, groups, atlases
+              intent is to be general enough that can be separate from 
+              crash-specific structures, yet be compatible at the same time
+              
+gfx/formats - stage 2 objects for importing and parsing/exporting and 
+              packing 3rd party model formats
+
+gfx/gl      - OpenGL/GLUT wrapper classes and context-manager/driver;
+              handles conversion of generic gfx objects to the GL state
+              
+gfx/*       - conversion of pylibcrash objects to general gfx objects
+              and vice-versa
+              also some software rasterization (could go under gfx/soft?)
+             

@@ -1,0 +1,49 @@
+- locals are declared at the start of a function (as per C standard)
+- i is name for general iterator
+- function names are prefixed with the module name or name of the
+  structure they operate on
+- local variable and structure field names are kept short as possible
+  such that the operation of the code is clear
+- stdint types are used to describe the layout of binary data and for
+  locals that will hold values of the corresponding structure fields
+- stdint signed types are only used where absolutely required to 
+  represent a value that could be interpreted as a negative number. 
+  int type is still used, however, for local iterators and counts.
+- size = number of bytes
+  length = number of non byte-sized items
+- size_t is used to represent an unsigned 32 bit value that is a size
+  in bytes of a structure, type, or array
+- typedefs are used to define a new type for a class of 'identifiers'.
+  such type has its own set of operations separate from the aliased 
+  primitive type and its typename annotates this fact
+  
+=====
+
+libcrash is not responsible for generating unprocessed game data such
+as:
+  world models
+  svtx models
+  zones, camera paths, collisions, entity spawn
+  gool bytecode, etc.
+  
+its primary purposes are
+- representing game data in the appropriate formats
+- packing and unpacking containers (pages, entries, items) in the 
+  NSF/NSD file hierarchy
+- decoding and encoding generic item structures to and from the packed 
+  game formats
+- providing a minimal graphics API and graphics structures that can be
+  used to unprocess and view graphic model content
+
+packing includes functions which automatically pack a list of entries 
+into the pages of a new NSF file and generate the necessary indexes in 
+a new NSD file. (this also includes packing of subtextures into texture 
+pages?)
+
+encoding includes functions for page compression as well as SLST poly id
+list delta compression; 
+
+any logic which is used to actually generate/populate entry items of 
+game-specific format (and which are not metadata describing the data 
+structure itself), is destined for placement in a separate utility
+library or application.
